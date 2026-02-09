@@ -6,7 +6,7 @@ import { parseLinkedInPdf } from "@/lib/linkedin-parser";
  * Accepts a PDF file upload (multipart/form-data, field name "file").
  * Returns structured profile JSON parsed by OpenAI.
  */
-export async function POST(request: NextRequest) {
+async function handler(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
@@ -39,7 +39,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           status: "error",
-          detail: "Could not parse the profile. The PDF may not be a LinkedIn export.",
+          detail:
+            "Could not parse the profile. The PDF may not be a LinkedIn export.",
         },
         { status: 422 }
       );
@@ -53,3 +54,5 @@ export async function POST(request: NextRequest) {
   }
 }
 
+export const GET = handler;
+export const POST = handler;

@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import { initializeJobSearch } from "@/lib/typesense";
 
 /**
- * POST /api/job-search/initialize
+ * POST|GET /api/job-search/initialize
  * Loads filter options from Typesense. Call on app startup.
  */
-export async function POST() {
+async function handler() {
   try {
     const filters = await initializeJobSearch();
     return NextResponse.json({ status: "ok", filters });
@@ -19,3 +19,5 @@ export async function POST() {
   }
 }
 
+export const GET = handler;
+export const POST = handler;

@@ -5,8 +5,8 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_BASE_PATH: "/chat-app",
   },
-  // Externalize pdf-parse from the Next.js bundle to avoid fs issues
-  serverExternalPackages: ["pdf-parse"],
+  // Prevent trailing-slash redirects that convert POST → GET
+  skipTrailingSlashRedirect: true,
 };
 
 export default nextConfig;
