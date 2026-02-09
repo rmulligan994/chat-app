@@ -1,0 +1,18 @@
+.button-4 {
+  padding: 0.75rem 1.5rem;
+
+  border: 1px solid var(--base-color-neutral--black);
+
+  background-color: var(--base-color-neutral--black);
+
+  color: var(--base-color-neutral--white);
+  text-align: center;
+  text-decoration: none;
+}
+
+.button-4.is-secondary {
+  border-style: none;
+  border-radius: 20px;
+  background-color: var(--base-color-system--error-red);
+  color: var(--base-color-brand--white);
+}

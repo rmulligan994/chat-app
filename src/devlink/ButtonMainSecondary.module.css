@@ -1,0 +1,43 @@
+.button-main {
+  position: relative;
+
+  display: flex;
+  overflow: hidden;
+  width: 100%;
+  max-width: 12rem;
+  padding: 0.625rem 2rem;
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+
+  border: 1px solid var(--base-color-neutral--black);
+  border-radius: 100vw;
+
+  color: var(--base-color-brand--black);
+  text-align: center;
+  text-decoration: none;
+}
+
+.button-main.is-secondary {
+  background-color: var(--base-color-brand--black);
+  color: var(--base-color-system--success-green);
+}
+
+.button-text-main {
+  display: flex;
+  justify-content: flex-start;
+  color: var(--base-color-brand--black);
+}
+
+.button-text-main.is-absolute {
+  position: absolute;
+  color: var(--base-color-brand--black);
+}
+
+.button-text-main.is-absolute.is-secondary {
+  color: var(--base-color-system--success-green);
+}
+
+.button-text-main.is-secondary {
+  color: var(--base-color-brand--white);
+}

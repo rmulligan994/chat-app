@@ -1,0 +1,23 @@
+/* If you want tailwind 'base' styles to override 'webflow' styles, re-order the layers */
+@layer properties, theme, base, webflow, components, utilities;
+
+/* Webflow global styles are imported in the 'webflow' layer */
+@import "../devlink/global.css" layer(webflow);
+@import "tailwindcss";
+
+:root {
+  --background: #f9fafb;
+  --foreground: #111827;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-inter), Arial, Helvetica, sans-serif;
+}
