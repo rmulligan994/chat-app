@@ -288,13 +288,43 @@ export async function POST(request: NextRequest) {
     // Step 2: Delete existing model (if it exists) - but only if we're sure we can recreate
     const deleteResponse = await typesenseApi("DELETE", `/conversations/models/${MODEL_ID}`);
     // 404 is OK - model might not exist yet
-    if (!deleteResponse.ok && deleteResponse.status !== 404) {
+    if (deleteResponse.ok) {
+      console.log(`Model deleted successfully. Waiting for Typesense to process deletion...`);
+      // Wait a bit for Typesense to fully process the deletion before creating a new one
+      // This prevents race conditions where Typesense might assign a UUID instead of our ID
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } else if (deleteResponse.status !== 404) {
       const errorText = await deleteResponse.text();
       console.warn(`Delete model warning (${deleteResponse.status}): ${errorText}`);
       // Don't fail here - continue to try creating
+    } else {
+      console.log("Model doesn't exist yet (404), proceeding to create");
     }
 
-    // Step 3: Create new model with updated prompt
+    // Step 3: Verify the model is actually gone before creating (to avoid conflicts)
+    try {
+      const checkResponse = await typesenseApi("GET", `/conversations/models/${MODEL_ID}`);
+      if (checkResponse.ok) {
+        console.warn("Model still exists after deletion attempt. Waiting longer...");
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Try deleting again
+        const retryDelete = await typesenseApi("DELETE", `/conversations/models/${MODEL_ID}`);
+        if (retryDelete.ok) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+    } catch {
+      // 404 is expected - model doesn't exist, which is what we want
+      console.log("Model confirmed deleted (or never existed)");
+    }
+
+    // Step 4: Create new model with updated prompt
+    console.log("Creating model with config:", {
+      id: modelConfig.id,
+      model_name: modelConfig.model_name,
+      system_prompt_length: modelConfig.system_prompt.length,
+    });
+    
     const createResponse = await typesenseApi("POST", "/conversations/models", modelConfig);
     
     console.log(`Create model response: ${createResponse.status}, ok: ${createResponse.ok}`);
@@ -346,10 +376,16 @@ export async function POST(request: NextRequest) {
     
     try {
       const responseText = await createResponse.text();
-      console.log("Create response text:", responseText.substring(0, 200));
+      console.log("Create response text (full):", responseText);
       
       try {
         newModel = JSON.parse(responseText) as typeof newModel;
+        console.log("Parsed model from create response:", {
+          id: newModel.id,
+          model_name: newModel.model_name,
+          expected_id: MODEL_ID,
+          id_matches: newModel.id === MODEL_ID,
+        });
       } catch (parseError) {
         console.error("Failed to parse create response as JSON:", parseError);
         console.error("Full response:", responseText);
@@ -363,7 +399,9 @@ export async function POST(request: NextRequest) {
     
     // Verify the model was created with the correct ID
     if (newModel.id !== MODEL_ID) {
-      console.warn(`Model ID mismatch: expected ${MODEL_ID}, got ${newModel.id}`);
+      console.error(`CRITICAL: Model ID mismatch! Expected "${MODEL_ID}", but got "${newModel.id}"`);
+      console.error("This means Typesense created the model with a different ID than requested.");
+      // Still continue, but this is a problem
     }
     
     console.log("Model created successfully:", {
@@ -372,22 +410,52 @@ export async function POST(request: NextRequest) {
       has_system_prompt: !!newModel.system_prompt,
     });
     
-    // Verify the model exists by fetching it (with a small delay for Typesense to index)
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    try {
-      const verifyResponse = await typesenseApi("GET", `/conversations/models/${MODEL_ID}`);
-      if (verifyResponse.ok) {
-        const verifiedModel = await verifyResponse.json() as typeof newModel;
-        console.log("Model verified successfully via GET:", verifiedModel.id);
-        // Use the verified model instead of the creation response
-        newModel = verifiedModel;
-      } else {
-        const verifyErrorText = await verifyResponse.text();
-        console.warn(`Model verification failed (${verifyResponse.status}): ${verifyErrorText}. This might be a timing or permissions issue.`);
+    // Verify the model exists by fetching it (with a delay for Typesense to index)
+    // Try multiple times with increasing delays
+    let verified = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const delay = attempt * 1000; // 1s, 2s, 3s
+      console.log(`Verification attempt ${attempt}/${3} after ${delay}ms delay...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      
+      try {
+        const verifyResponse = await typesenseApi("GET", `/conversations/models/${MODEL_ID}`);
+        if (verifyResponse.ok) {
+          const verifiedModel = await verifyResponse.json() as typeof newModel;
+          console.log(`✓ Model verified successfully via GET (attempt ${attempt}):`, verifiedModel.id);
+          // Use the verified model instead of the creation response
+          newModel = verifiedModel;
+          verified = true;
+          break;
+        } else {
+          const verifyErrorText = await verifyResponse.text();
+          console.warn(`✗ Verification attempt ${attempt} failed (${verifyResponse.status}): ${verifyErrorText}`);
+        }
+      } catch (verifyError) {
+        console.warn(`✗ Verification attempt ${attempt} error:`, verifyError);
       }
-    } catch (verifyError) {
-      console.warn("Model verification error (but creation succeeded):", verifyError);
+    }
+    
+    if (!verified) {
+      console.error("⚠ WARNING: Could not verify model exists after creation. It may take longer to be available.");
+      // Also try listing all models to see if it appears with a different ID
+      try {
+        const listResponse = await typesenseApi("GET", "/conversations/models");
+        if (listResponse.ok) {
+          const listText = await listResponse.text();
+          const allModels = JSON.parse(listText);
+          const modelList = Array.isArray(allModels) ? allModels : (allModels.models || []);
+          console.log("Available models after creation:", modelList.map((m: { id: string }) => m.id));
+          const foundModel = modelList.find((m: { id: string }) => m.id === MODEL_ID || m.id === newModel.id);
+          if (foundModel) {
+            console.log("Found model in list:", foundModel.id);
+          } else {
+            console.error("Model not found in list even after creation!");
+          }
+        }
+      } catch (listError) {
+        console.error("Could not list models for verification:", listError);
+      }
     }
     
     return NextResponse.json({
