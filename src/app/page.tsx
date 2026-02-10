@@ -5,10 +5,11 @@ import { loadSettings, saveSettings, type AppSettings } from "@/lib/settings";
 import JobSearchChat from "./components/JobSearchChat";
 import LinkedInParser from "./components/LinkedInParser";
 import SettingsPanel from "./components/SettingsPanel";
+import SystemPromptPanel from "./components/SystemPromptPanel";
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
-type Tab = "chat" | "linkedin" | "settings";
+type Tab = "chat" | "linkedin" | "settings" | "system-prompt";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("chat");
@@ -85,6 +86,16 @@ export default function Home() {
             >
               ⚙️ Settings
             </button>
+            <button
+              onClick={() => setActiveTab("system-prompt")}
+              className={`px-4 py-2 text-sm font-medium rounded-lg transition ${
+                activeTab === "system-prompt"
+                  ? "bg-blue-50 text-blue-600"
+                  : "text-gray-500 hover:text-gray-800 hover:bg-gray-100"
+              }`}
+            >
+              🤖 System Prompt
+            </button>
           </nav>
         </div>
       </header>
@@ -104,6 +115,7 @@ export default function Home() {
         {activeTab === "settings" && (
           <SettingsPanel settings={settings} onChange={handleSettingsChange} />
         )}
+        {activeTab === "system-prompt" && <SystemPromptPanel />}
       </main>
     </>
   );
