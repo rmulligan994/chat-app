@@ -13,25 +13,122 @@ interface ModelInfo {
   ttl: number;
 }
 
+interface ModelListItem {
+  id: string;
+  model_name: string;
+}
+
+// localStorage key for model names mapping
+const MODEL_NAMES_KEY = "typesense_model_names";
+const SELECTED_MODEL_KEY = "typesense_selected_model";
+
+// Helper functions for localStorage
+function getModelNames(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const stored = localStorage.getItem(MODEL_NAMES_KEY);
+    return stored ? JSON.parse(stored) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveModelName(uuid: string, name: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const names = getModelNames();
+    names[uuid] = name;
+    localStorage.setItem(MODEL_NAMES_KEY, JSON.stringify(names));
+  } catch (err) {
+    console.error("Failed to save model name:", err);
+  }
+}
+
+function getSelectedModelId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return localStorage.getItem(SELECTED_MODEL_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveSelectedModelId(uuid: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(SELECTED_MODEL_KEY, uuid);
+  } catch (err) {
+    console.error("Failed to save selected model:", err);
+  }
+}
+
 export default function SystemPromptPanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
+  const [allModels, setAllModels] = useState<ModelListItem[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [modelName, setModelName] = useState<string>("");
+  const [editingName, setEditingName] = useState(false);
   const [defaultPrompt, setDefaultPrompt] = useState<string>("");
   const [editedPrompt, setEditedPrompt] = useState<string>("");
 
-  // Load current model and default prompt
+  // Load all models and selected model on mount
   useEffect(() => {
-    loadModel();
+    loadAllModels();
+    const savedId = getSelectedModelId();
+    if (savedId) {
+      setSelectedModelId(savedId);
+      loadModel(savedId);
+    } else {
+      loadModel(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadModel = async () => {
+  // Load model when selection changes
+  useEffect(() => {
+    if (selectedModelId) {
+      loadModel(selectedModelId);
+    } else {
+      setCurrentModel(null);
+      setEditedPrompt(defaultPrompt);
+    }
+  }, [selectedModelId, defaultPrompt]);
+
+  const loadAllModels = async () => {
+    try {
+      const res = await fetch(`${basePath}/api/system-prompt?list=true`);
+      const data = (await res.json()) as {
+        status: string;
+        models?: ModelListItem[];
+        detail?: string;
+      };
+
+      if (data.status === "ok" && data.models) {
+        setAllModels(data.models);
+        // If no model is selected, select the first one
+        if (!selectedModelId && data.models.length > 0) {
+          const firstId = data.models[0].id;
+          setSelectedModelId(firstId);
+          saveSelectedModelId(firstId);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load models list:", err);
+    }
+  };
+
+  const loadModel = async (modelId: string | null) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${basePath}/api/system-prompt`);
+      const url = modelId
+        ? `${basePath}/api/system-prompt?modelId=${encodeURIComponent(modelId)}`
+        : `${basePath}/api/system-prompt`;
+      const res = await fetch(url);
       const data = (await res.json()) as {
         status: string;
         model?: ModelInfo;
@@ -47,6 +144,7 @@ export default function SystemPromptPanel() {
             setDefaultPrompt(data.default_prompt);
             setEditedPrompt(data.default_prompt);
           }
+          setCurrentModel(null);
           return;
         }
         throw new Error(data.detail || "Failed to load model");
@@ -55,6 +153,9 @@ export default function SystemPromptPanel() {
       if (data.model) {
         setCurrentModel(data.model);
         setEditedPrompt(data.model.system_prompt);
+        // Load saved name for this model
+        const names = getModelNames();
+        setModelName(names[data.model.id] || "");
       }
       if (data.default_prompt) {
         setDefaultPrompt(data.default_prompt);
@@ -68,6 +169,22 @@ export default function SystemPromptPanel() {
       setError(message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleModelSelect = (uuid: string) => {
+    setSelectedModelId(uuid);
+    saveSelectedModelId(uuid);
+    setError(null);
+    setSuccess(null);
+  };
+
+  const handleSaveName = () => {
+    if (selectedModelId && modelName.trim()) {
+      saveModelName(selectedModelId, modelName.trim());
+      setEditingName(false);
+      setSuccess("Model name saved!");
+      setTimeout(() => setSuccess(null), 2000);
     }
   };
 
@@ -85,7 +202,10 @@ export default function SystemPromptPanel() {
       const res = await fetch(`${basePath}/api/system-prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ system_prompt: editedPrompt }),
+        body: JSON.stringify({
+          system_prompt: editedPrompt,
+          modelId: selectedModelId || undefined, // Include UUID if updating existing model
+        }),
       });
 
       const data = (await res.json()) as {
@@ -98,7 +218,6 @@ export default function SystemPromptPanel() {
       };
 
       if (!res.ok || data.status !== "ok") {
-        // Show more detailed error if available
         let errorMsg = data.detail || "Failed to update system prompt";
         if (data.typesense_error) {
           errorMsg += `\n\nTypesense Error (${data.typesense_status}): ${data.typesense_error}`;
@@ -107,19 +226,28 @@ export default function SystemPromptPanel() {
       }
 
       setSuccess(data.message || "System prompt updated successfully!");
-      // If model was created/updated, set it from the response
+      
       if (data.model) {
         // Use the model from response immediately
         setCurrentModel(data.model);
         setEditedPrompt(data.model.system_prompt || editedPrompt);
-        // Also reload after a delay to ensure Typesense has indexed it
+        
+        // If this is a new model (UUID), update selection and reload models list
+        if (!selectedModelId || selectedModelId !== data.model.id) {
+          setSelectedModelId(data.model.id);
+          saveSelectedModelId(data.model.id);
+          await loadAllModels();
+        }
+        
+        // Reload after a delay to ensure Typesense has indexed it
         setTimeout(() => {
-          loadModel().catch(console.error);
+          loadModel(data.model!.id).catch(console.error);
         }, 1000);
       } else {
-        // Reload to get the updated model (with a delay for Typesense to index)
         await new Promise(resolve => setTimeout(resolve, 1000));
-        await loadModel();
+        if (selectedModelId) {
+          await loadModel(selectedModelId);
+        }
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to update system prompt";
@@ -143,41 +271,45 @@ export default function SystemPromptPanel() {
       const res = await fetch(`${basePath}/api/system-prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ use_default: true }),
+        body: JSON.stringify({
+          use_default: true,
+          modelId: selectedModelId || undefined,
+        }),
       });
 
       const data = (await res.json()) as {
         status: string;
         message?: string;
         detail?: string;
-        typesense_status?: number;
         typesense_error?: string;
         model?: ModelInfo;
       };
 
       if (!res.ok || data.status !== "ok") {
-        // Show more detailed error if available
         let errorMsg = data.detail || "Failed to reset system prompt";
         if (data.typesense_error) {
-          errorMsg += `\n\nTypesense Error (${data.typesense_status}): ${data.typesense_error}`;
+          errorMsg += `\n\nTypesense Error: ${data.typesense_error}`;
         }
         throw new Error(errorMsg);
       }
 
       setSuccess(data.message || "System prompt reset to default!");
-      // If model was created/updated, set it from the response
       if (data.model) {
-        // Use the model from response immediately
         setCurrentModel(data.model);
         setEditedPrompt(data.model.system_prompt || defaultPrompt);
-        // Also reload after a delay to ensure Typesense has indexed it
+        if (!selectedModelId || selectedModelId !== data.model.id) {
+          setSelectedModelId(data.model.id);
+          saveSelectedModelId(data.model.id);
+          await loadAllModels();
+        }
         setTimeout(() => {
-          loadModel().catch(console.error);
+          loadModel(data.model!.id).catch(console.error);
         }, 1000);
       } else {
-        // Reload to get the updated model (with a delay for Typesense to index)
         await new Promise(resolve => setTimeout(resolve, 1000));
-        await loadModel();
+        if (selectedModelId) {
+          await loadModel(selectedModelId);
+        }
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to reset system prompt";
@@ -187,7 +319,13 @@ export default function SystemPromptPanel() {
     }
   };
 
-  if (loading) {
+
+  const modelNames = getModelNames();
+  const getModelDisplayName = (uuid: string) => {
+    return modelNames[uuid] || `${uuid.substring(0, 8)}...`;
+  };
+
+  if (loading && !currentModel) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-8">
         <div className="text-center space-y-4">
@@ -209,25 +347,94 @@ export default function SystemPromptPanel() {
           </p>
         </div>
 
+        {/* Model Selection */}
+        <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+          <div className="flex items-center gap-4">
+            <label className="text-sm font-medium text-gray-700">Select Model:</label>
+            <select
+              value={selectedModelId || ""}
+              onChange={(e) => handleModelSelect(e.target.value)}
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">-- Create New Model --</option>
+              {allModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {getModelDisplayName(model.id)} ({model.id.substring(0, 8)}...)
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={loadAllModels}
+              className="px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {/* Model Name Editor */}
+          {selectedModelId && (
+            <div className="mt-3 flex items-center gap-2">
+              {editingName ? (
+                <>
+                  <input
+                    type="text"
+                    value={modelName}
+                    onChange={(e) => setModelName(e.target.value)}
+                    placeholder="Enter model name..."
+                    className="flex-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleSaveName();
+                      if (e.key === "Escape") {
+                        setEditingName(false);
+                        setModelName(modelNames[selectedModelId] || "");
+                      }
+                    }}
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleSaveName}
+                    className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditingName(false);
+                      setModelName(modelNames[selectedModelId] || "");
+                    }}
+                    className="px-3 py-1.5 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="text-sm text-gray-600">
+                    Name: <span className="font-medium">{modelName || "Unnamed"}</span>
+                  </span>
+                  <button
+                    onClick={() => setEditingName(true)}
+                    className="px-2 py-1 text-xs text-blue-600 hover:text-blue-700"
+                  >
+                    Edit
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Model Info or Missing Model Warning */}
         {currentModel ? (
           <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <span className="text-gray-500">Model ID:</span>
-                <span className="ml-2 font-mono text-gray-900">{currentModel.id}</span>
+                <span className="ml-2 font-mono text-gray-900 text-xs">{currentModel.id}</span>
               </div>
               <div>
                 <span className="text-gray-500">Model Name:</span>
                 <span className="ml-2 font-mono text-gray-900">{currentModel.model_name}</span>
-              </div>
-              <div>
-                <span className="text-gray-500">Max Bytes:</span>
-                <span className="ml-2 text-gray-900">{currentModel.max_bytes.toLocaleString()}</span>
-              </div>
-              <div>
-                <span className="text-gray-500">TTL:</span>
-                <span className="ml-2 text-gray-900">{currentModel.ttl / 3600}h</span>
               </div>
             </div>
           </div>
@@ -236,9 +443,11 @@ export default function SystemPromptPanel() {
             <div className="flex items-start gap-2">
               <span className="text-yellow-600 text-lg">⚠️</span>
               <div className="text-sm text-yellow-800">
-                <p className="font-medium mb-1">Model Not Found</p>
+                <p className="font-medium mb-1">No Model Selected</p>
                 <p className="text-yellow-700">
-                  The conversation model doesn&apos;t exist yet. Create it using the default prompt below, or edit the prompt first.
+                  {selectedModelId
+                    ? "The selected model doesn&apos;t exist. Create a new one below."
+                    : "Select a model from the dropdown above, or create a new one."}
                 </p>
               </div>
             </div>
@@ -247,7 +456,7 @@ export default function SystemPromptPanel() {
 
         {/* Error/Success Messages */}
         {error && (
-          <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 whitespace-pre-line">
             {error}
           </div>
         )}
@@ -305,7 +514,7 @@ export default function SystemPromptPanel() {
                 </button>
               )}
               <button
-                onClick={loadModel}
+                onClick={() => loadModel(selectedModelId)}
                 disabled={saving}
                 className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
               >
@@ -322,16 +531,10 @@ export default function SystemPromptPanel() {
             <div className="text-sm text-blue-800">
               <p className="font-medium mb-1">How it works:</p>
               <ul className="list-disc list-inside space-y-1 text-blue-700">
-                <li>
-                  Changes are applied by deleting and recreating the model
-                  (Typesense doesn&apos;t support in-place updates)
-                </li>
-                <li>The model ID remains the same, so existing conversations will continue to work</li>
-                <li>Changes take effect immediately for new conversations</li>
-                <li>
-                  Use &quot;Return to Default&quot; to restore the original prompt from
-                  ragexperients.py
-                </li>
+                <li>Select a model from the dropdown or create a new one</li>
+                <li>Name your models for easy identification (stored in browser)</li>
+                <li>Changes are applied by deleting and recreating the model</li>
+                <li>New models get UUIDs automatically from Typesense</li>
               </ul>
             </div>
           </div>
@@ -340,4 +543,3 @@ export default function SystemPromptPanel() {
     </div>
   );
 }
-

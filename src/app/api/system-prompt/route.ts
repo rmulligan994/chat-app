@@ -115,16 +115,55 @@ async function typesenseApi(
 
 /**
  * GET /api/system-prompt
- * Retrieve the current conversation model and system prompt
+ * Retrieve a specific model by ID, or list all models if ?list=true
+ * Query params: ?modelId=<uuid> (optional, defaults to MODEL_ID), ?list=true (to list all)
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+    const listAll = searchParams.get("list") === "true";
+    const modelId = searchParams.get("modelId") || MODEL_ID;
+    
+    // If list=true, return all models
+    if (listAll) {
+      const listResponse = await typesenseApi("GET", "/conversations/models");
+      if (!listResponse.ok) {
+        const errorText = await listResponse.text();
+        throw new Error(`Failed to list models: ${errorText}`);
+      }
+      
+      const listText = await listResponse.text();
+      let allModels: Array<{ id: string; model_name?: string; [key: string]: unknown }> = [];
+      try {
+        const parsed = JSON.parse(listText);
+        if (Array.isArray(parsed)) {
+          allModels = parsed;
+        } else if (parsed.models && Array.isArray(parsed.models)) {
+          allModels = parsed.models;
+        } else if (parsed.conversation_models && Array.isArray(parsed.conversation_models)) {
+          allModels = parsed.conversation_models;
+        }
+      } catch (parseError) {
+        console.error("Failed to parse models list:", parseError);
+        throw new Error(`Failed to parse models list: ${listText}`);
+      }
+      
+      return NextResponse.json({
+        status: "ok",
+        models: allModels.map(m => ({
+          id: m.id,
+          model_name: m.model_name || "unknown",
+        })),
+      });
+    }
+    
+    // Otherwise, fetch specific model
     const apiKeySource = process.env.TYPESENSE_API_KEY ? "environment" : "hardcoded";
     const apiKeyPreview = TYPESENSE_API_KEY.substring(0, 10) + "...";
-    console.log(`Fetching model: ${MODEL_ID} from ${TYPESENSE_HOST}`);
+    console.log(`Fetching model: ${modelId} from ${TYPESENSE_HOST}`);
     console.log(`API key source: ${apiKeySource}, key: ${apiKeyPreview} (length: ${TYPESENSE_API_KEY.length})`);
     
-    const response = await typesenseApi("GET", `/conversations/models/${MODEL_ID}`);
+    const response = await typesenseApi("GET", `/conversations/models/${modelId}`);
     
     console.log(`Response status: ${response.status}, ok: ${response.ok}`);
     
@@ -170,8 +209,8 @@ export async function GET() {
                 status: "error", 
                 detail: "Model not found. It may need to be created first.",
                 debug: {
-                  model_id: MODEL_ID,
-                  endpoint: `/conversations/models/${MODEL_ID}`,
+                  model_id: modelId,
+                  endpoint: `/conversations/models/${modelId}`,
                   typesense_error: errorText,
                   available_models: allModels.map(m => m.id),
                   list_response_status: listResponse.status,
@@ -195,8 +234,8 @@ export async function GET() {
             status: "error", 
             detail: "Model not found. It may need to be created first.",
             debug: {
-              model_id: MODEL_ID,
-              endpoint: `/conversations/models/${MODEL_ID}`,
+              model_id: modelId,
+              endpoint: `/conversations/models/${modelId}`,
               typesense_error: errorText,
             }
           },
@@ -251,17 +290,21 @@ export async function GET() {
 
 /**
  * POST /api/system-prompt
- * Update the conversation model with a new system prompt
- * Body: { system_prompt: string, use_default?: boolean }
+ * Create or update a conversation model with a new system prompt
+ * Body: { system_prompt: string, use_default?: boolean, modelId?: string }
  * 
  * Note: Typesense doesn't support in-place updates, so we delete and recreate the model.
+ * If modelId is provided, we'll update that model. Otherwise, we'll create a new one.
  */
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as {
       system_prompt?: string;
       use_default?: boolean;
+      modelId?: string; // UUID of existing model to update, or undefined to create new
     };
+    
+    const targetModelId = body.modelId; // Use provided UUID or undefined for new model
 
     // Determine which prompt to use
     let systemPrompt: string;
@@ -285,8 +328,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const modelConfig = {
-      id: MODEL_ID,
+    // If updating existing model, delete it first. Otherwise, let Typesense generate UUID
+    const modelConfig: {
+      id?: string;
+      model_name: string;
+      api_key: string;
+      system_prompt: string;
+      max_bytes: number;
+      history_collection: string;
+      ttl: number;
+    } = {
       model_name: "openai/gpt-4o",
       api_key: openaiApiKey,
       system_prompt: systemPrompt,
@@ -294,6 +345,12 @@ export async function POST(request: NextRequest) {
       history_collection: "job_search_conversations",
       ttl: 86400,
     };
+    
+    // Only set ID if we're updating an existing model (Typesense will use it)
+    // For new models, omit ID and let Typesense generate UUID
+    if (targetModelId) {
+      modelConfig.id = targetModelId;
+    }
 
     console.log("Attempting to create/update model:", {
       id: modelConfig.id,
@@ -302,37 +359,22 @@ export async function POST(request: NextRequest) {
       api_key_set: !!openaiApiKey,
     });
 
-    // Step 2: Delete existing model (if it exists) - but only if we're sure we can recreate
-    const deleteResponse = await typesenseApi("DELETE", `/conversations/models/${MODEL_ID}`);
-    // 404 is OK - model might not exist yet
-    if (deleteResponse.ok) {
-      console.log(`Model deleted successfully. Waiting for Typesense to process deletion...`);
-      // Wait a bit for Typesense to fully process the deletion before creating a new one
-      // This prevents race conditions where Typesense might assign a UUID instead of our ID
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } else if (deleteResponse.status !== 404) {
-      const errorText = await deleteResponse.text();
-      console.warn(`Delete model warning (${deleteResponse.status}): ${errorText}`);
-      // Don't fail here - continue to try creating
-    } else {
-      console.log("Model doesn't exist yet (404), proceeding to create");
-    }
-
-    // Step 3: Verify the model is actually gone before creating (to avoid conflicts)
-    try {
-      const checkResponse = await typesenseApi("GET", `/conversations/models/${MODEL_ID}`);
-      if (checkResponse.ok) {
-        console.warn("Model still exists after deletion attempt. Waiting longer...");
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        // Try deleting again
-        const retryDelete = await typesenseApi("DELETE", `/conversations/models/${MODEL_ID}`);
-        if (retryDelete.ok) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
+    // Step 2: Delete existing model if we're updating (targetModelId provided)
+    if (targetModelId) {
+      console.log(`Updating existing model: ${targetModelId}`);
+      const deleteResponse = await typesenseApi("DELETE", `/conversations/models/${targetModelId}`);
+      // 404 is OK - model might not exist
+      if (deleteResponse.ok) {
+        console.log(`Model deleted successfully. Waiting for Typesense to process deletion...`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } else if (deleteResponse.status !== 404) {
+        const errorText = await deleteResponse.text();
+        console.warn(`Delete model warning (${deleteResponse.status}): ${errorText}`);
+      } else {
+        console.log("Model doesn't exist (404), will create new one");
       }
-    } catch {
-      // 404 is expected - model doesn't exist, which is what we want
-      console.log("Model confirmed deleted (or never existed)");
+    } else {
+      console.log("Creating new model (Typesense will generate UUID)");
     }
 
     // Step 4: Create new model with updated prompt
@@ -428,36 +470,15 @@ export async function POST(request: NextRequest) {
           id_matches: newModel.id === MODEL_ID,
         });
         
-        // CRITICAL CHECK: If Typesense returned a UUID instead of our ID, that's the problem!
-        if (newModel.id !== MODEL_ID) {
-          console.error(`❌ CRITICAL: Typesense created model with UUID "${newModel.id}" instead of "${MODEL_ID}"!`);
-          console.error("This means Typesense ignored our 'id' field and auto-generated a UUID.");
-          console.error("Possible causes:");
-          console.error("  1. Large payload timeout - Typesense may have timed out and created async with UUID");
-          console.error("  2. The ID format is invalid (but 'job-search-assistant' should be valid)");
-          console.error("  3. There's a conflict (model with that ID already exists in Typesense's view)");
-          console.error("  4. Typesense Cloud has restrictions on custom IDs for large models");
-          console.error(`  5. Payload size: ${payloadSize} bytes (${(payloadSize / 1024).toFixed(2)}KB)`);
-          
-          // Try to delete this UUID model to clean up
-          try {
-            const cleanupResponse = await typesenseApi("DELETE", `/conversations/models/${newModel.id}`);
-            console.log(`Cleaned up UUID model: ${cleanupResponse.status}`);
-          } catch (cleanupError) {
-            console.error("Could not clean up UUID model:", cleanupError);
-          }
-          
-          // Return an error - we can't proceed with a UUID model
-          return NextResponse.json(
-            {
-              status: "error",
-              detail: `Typesense created model with UUID "${newModel.id}" instead of "${MODEL_ID}". This often happens with large payloads due to timeout or async processing. Try reducing the system prompt size or wait longer.`,
-              created_model_id: newModel.id,
-              expected_id: MODEL_ID,
-              payload_size_kb: (payloadSize / 1024).toFixed(2),
-            },
-            { status: 500 }
-          );
+        // If we were updating, verify the ID matches (or accept UUID if Typesense generated one)
+        if (targetModelId && newModel.id !== targetModelId) {
+          console.warn(`Model ID changed from "${targetModelId}" to "${newModel.id}" - Typesense may have generated a new UUID`);
+          // This is OK - we'll use the new UUID
+        }
+        
+        // For new models (no targetModelId), UUID is expected and OK
+        if (!targetModelId) {
+          console.log(`New model created with UUID: ${newModel.id}`);
         }
       } catch (parseError) {
         console.error("Failed to parse create response as JSON:", parseError);

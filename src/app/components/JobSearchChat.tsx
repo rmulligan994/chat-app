@@ -61,6 +61,18 @@ export default function JobSearchChat({
     setLoading(true);
 
     try {
+      // Get the selected model ID from localStorage (same as SystemPromptPanel)
+      // This ensures we use the model selected in the System Prompt page
+      let modelId = settings.modelId;
+      try {
+        const selectedModelId = localStorage.getItem("typesense_selected_model");
+        if (selectedModelId) {
+          modelId = selectedModelId;
+        }
+      } catch {
+        // Fall back to settings.modelId if localStorage fails
+      }
+
       const res = await fetch(`${basePath}/api/job-search/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -71,7 +83,7 @@ export default function JobSearchChat({
             perPage: settings.perPage,
             systemPrompt: settings.systemPrompt || undefined,
             collectionName: settings.collectionName,
-            modelId: settings.modelId,
+            modelId: modelId, // Use selected model from localStorage
             defaultFilters: settings.defaultFilters,
           },
         }),

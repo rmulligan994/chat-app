@@ -50,6 +50,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 const STORAGE_KEY = "brightspring-settings";
+const SELECTED_MODEL_KEY = "typesense_selected_model"; // Same key as SystemPromptPanel
 
 /** Load settings from localStorage (falls back to defaults). */
 export function loadSettings(): AppSettings {
@@ -57,8 +58,20 @@ export function loadSettings(): AppSettings {
 
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    const settings = raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : { ...DEFAULT_SETTINGS };
+    
+    // Override modelId with selected model from SystemPromptPanel if available
+    // This ensures chat uses the same model selected in System Prompt page
+    try {
+      const selectedModelId = localStorage.getItem(SELECTED_MODEL_KEY);
+      if (selectedModelId) {
+        settings.modelId = selectedModelId;
+      }
+    } catch {
+      // If selected model key doesn't exist or fails, use stored/default modelId
+    }
+    
+    return settings;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
