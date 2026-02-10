@@ -100,36 +100,92 @@ async function typesenseApi(
  */
 export async function GET() {
   try {
+    console.log(`Fetching model: ${MODEL_ID} from ${TYPESENSE_HOST}`);
     const response = await typesenseApi("GET", `/conversations/models/${MODEL_ID}`);
+    
+    console.log(`Response status: ${response.status}, ok: ${response.ok}`);
     
     if (!response.ok) {
       if (response.status === 404) {
+        // Try to get more info about why it's 404
+        let errorText: string;
+        try {
+          errorText = await response.text();
+        } catch {
+          errorText = "Could not read error response";
+        }
+        console.error(`Model not found (404). Error: ${errorText}`);
+        
+        // Try listing all models to see what exists
+        try {
+          const listResponse = await typesenseApi("GET", "/conversations/models");
+          if (listResponse.ok) {
+            const allModels = (await listResponse.json()) as { models?: Array<{ id: string }> };
+            console.log("Available models:", allModels);
+            return NextResponse.json(
+              { 
+                status: "error", 
+                detail: "Model not found. It may need to be created first.",
+                debug: {
+                  model_id: MODEL_ID,
+                  endpoint: `/conversations/models/${MODEL_ID}`,
+                  typesense_error: errorText,
+                  available_models: allModels.models?.map(m => m.id) || [],
+                }
+              },
+              { status: 404 }
+            );
+          }
+        } catch (listError) {
+          console.error("Failed to list models:", listError);
+        }
+        
         return NextResponse.json(
-          { status: "error", detail: "Model not found. It may need to be created first." },
+          { 
+            status: "error", 
+            detail: "Model not found. It may need to be created first.",
+            debug: {
+              model_id: MODEL_ID,
+              endpoint: `/conversations/models/${MODEL_ID}`,
+              typesense_error: errorText,
+            }
+          },
           { status: 404 }
         );
       }
       const errorText = await response.text();
+      console.error(`Typesense API error (${response.status}): ${errorText}`);
       throw new Error(`Typesense API error (${response.status}): ${errorText}`);
     }
 
-    const model = (await response.json()) as {
+    let model: {
       id: string;
       model_name: string;
       system_prompt?: string;
-      max_bytes: number;
-      history_collection: string;
-      ttl: number;
+      max_bytes?: number;
+      history_collection?: string;
+      ttl?: number;
     };
+    
+    try {
+      model = (await response.json()) as typeof model;
+      console.log(`Model retrieved successfully: ${model.id}`);
+    } catch (jsonError) {
+      const responseText = await response.text();
+      console.error("Failed to parse model JSON:", jsonError);
+      console.error("Response text:", responseText);
+      throw new Error(`Failed to parse model response: ${responseText}`);
+    }
+    
     return NextResponse.json({
       status: "ok",
       model: {
         id: model.id,
         model_name: model.model_name,
         system_prompt: model.system_prompt || "",
-        max_bytes: model.max_bytes,
-        history_collection: model.history_collection,
-        ttl: model.ttl,
+        max_bytes: model.max_bytes || 16384,
+        history_collection: model.history_collection || "job_search_conversations",
+        ttl: model.ttl || 86400,
       },
       default_prompt: DEFAULT_SYSTEM_PROMPT,
     });
