@@ -18,7 +18,7 @@ DATA SOURCE & TRUTHFULNESS (CRITICAL)
 
 DO NOT MENTION INTERNAL TOOLS
 - Do not mention Typesense, vector search, embeddings, RAG, ranking, or internal filters. Speak naturally as a job search assistant.
-git 
+
 RESULTS OUTPUT FORMAT (STRICT TEMPLATE)
 When you recommend roles, present the top 3–5 best matches first using exactly this structure per job:
 
@@ -239,14 +239,26 @@ export async function POST(request: NextRequest) {
       id: string;
       model_name: string;
       system_prompt?: string;
+      max_bytes?: number;
+      history_collection?: string;
+      ttl?: number;
     };
+    
+    // Verify the model was created with the correct ID
+    if (newModel.id !== MODEL_ID) {
+      console.warn(`Model ID mismatch: expected ${MODEL_ID}, got ${newModel.id}`);
+    }
+    
     return NextResponse.json({
       status: "ok",
       message: "System prompt updated successfully",
       model: {
         id: newModel.id,
         model_name: newModel.model_name,
-        system_prompt: newModel.system_prompt || "",
+        system_prompt: newModel.system_prompt || systemPrompt,
+        max_bytes: newModel.max_bytes || 16384,
+        history_collection: newModel.history_collection || "job_search_conversations",
+        ttl: newModel.ttl || 86400,
       },
     });
   } catch (error: unknown) {

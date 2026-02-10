@@ -94,6 +94,7 @@ export default function SystemPromptPanel() {
         detail?: string;
         typesense_status?: number;
         typesense_error?: string;
+        model?: ModelInfo;
       };
 
       if (!res.ok || data.status !== "ok") {
@@ -106,8 +107,15 @@ export default function SystemPromptPanel() {
       }
 
       setSuccess(data.message || "System prompt updated successfully!");
-      // Reload to get the updated model
-      await loadModel();
+      // If model was created/updated, set it from the response
+      if (data.model) {
+        setCurrentModel(data.model);
+        setEditedPrompt(data.model.system_prompt || editedPrompt);
+      } else {
+        // Reload to get the updated model (with a small delay for Typesense to index)
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await loadModel();
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to update system prompt";
       setError(message);
@@ -139,6 +147,7 @@ export default function SystemPromptPanel() {
         detail?: string;
         typesense_status?: number;
         typesense_error?: string;
+        model?: ModelInfo;
       };
 
       if (!res.ok || data.status !== "ok") {
@@ -151,8 +160,15 @@ export default function SystemPromptPanel() {
       }
 
       setSuccess(data.message || "System prompt reset to default!");
-      // Reload to get the updated model
-      await loadModel();
+      // If model was created/updated, set it from the response
+      if (data.model) {
+        setCurrentModel(data.model);
+        setEditedPrompt(data.model.system_prompt || defaultPrompt);
+      } else {
+        // Reload to get the updated model (with a small delay for Typesense to index)
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await loadModel();
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to reset system prompt";
       setError(message);
@@ -243,6 +259,7 @@ export default function SystemPromptPanel() {
                 onChange={(e) => setEditedPrompt(e.target.value)}
                 className="w-full h-96 px-4 py-3 border border-gray-300 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                 placeholder="Enter system prompt..."
+                readOnly={false}
               />
               <p className="mt-2 text-xs text-gray-500">
                 {editedPrompt.length.toLocaleString()} characters
