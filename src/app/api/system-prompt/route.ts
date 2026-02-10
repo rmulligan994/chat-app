@@ -18,7 +18,7 @@ DATA SOURCE & TRUTHFULNESS (CRITICAL)
 
 DO NOT MENTION INTERNAL TOOLS
 - Do not mention Typesense, vector search, embeddings, RAG, ranking, or internal filters. Speak naturally as a job search assistant.
-
+git 
 RESULTS OUTPUT FORMAT (STRICT TEMPLATE)
 When you recommend roles, present the top 3–5 best matches first using exactly this structure per job:
 
@@ -201,7 +201,10 @@ export async function POST(request: NextRequest) {
     
     if (!createResponse.ok) {
       const errorText = await createResponse.text();
-      throw new Error(`Failed to create model (${createResponse.status}): ${errorText}`);
+      const errorMessage = `Failed to create model (${createResponse.status}): ${errorText}`;
+      console.error("Model creation failed:", errorMessage);
+      console.error("Model config:", { ...modelConfig, api_key: "[REDACTED]" });
+      throw new Error(errorMessage);
     }
 
     const newModel = (await createResponse.json()) as {

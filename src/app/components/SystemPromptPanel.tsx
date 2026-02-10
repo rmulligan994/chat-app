@@ -40,6 +40,15 @@ export default function SystemPromptPanel() {
       };
 
       if (!res.ok || data.status !== "ok") {
+        // If model doesn't exist (404), that's OK - we'll show a create button
+        if (res.status === 404) {
+          setError(null); // Clear error for 404
+          if (data.default_prompt) {
+            setDefaultPrompt(data.default_prompt);
+            setEditedPrompt(data.default_prompt);
+          }
+          return;
+        }
         throw new Error(data.detail || "Failed to load model");
       }
 
@@ -49,6 +58,10 @@ export default function SystemPromptPanel() {
       }
       if (data.default_prompt) {
         setDefaultPrompt(data.default_prompt);
+        // If no model exists, initialize editor with default prompt
+        if (!data.model) {
+          setEditedPrompt(data.default_prompt);
+        }
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to load model";
@@ -156,8 +169,8 @@ export default function SystemPromptPanel() {
           </p>
         </div>
 
-        {/* Model Info */}
-        {currentModel && (
+        {/* Model Info or Missing Model Warning */}
+        {currentModel ? (
           <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
@@ -175,6 +188,18 @@ export default function SystemPromptPanel() {
               <div>
                 <span className="text-gray-500">TTL:</span>
                 <span className="ml-2 text-gray-900">{currentModel.ttl / 3600}h</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="px-6 py-4 bg-yellow-50 border-b border-yellow-200">
+            <div className="flex items-start gap-2">
+              <span className="text-yellow-600 text-lg">⚠️</span>
+              <div className="text-sm text-yellow-800">
+                <p className="font-medium mb-1">Model Not Found</p>
+                <p className="text-yellow-700">
+                  The conversation model doesn&apos;t exist yet. Create it using the default prompt below, or edit the prompt first.
+                </p>
               </div>
             </div>
           </div>
@@ -212,20 +237,32 @@ export default function SystemPromptPanel() {
 
             {/* Action Buttons */}
             <div className="flex items-center gap-3 pt-4 border-t border-gray-200">
-              <button
-                onClick={handleSave}
-                disabled={saving || editedPrompt.trim() === currentModel?.system_prompt}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
-              >
-                {saving ? "Saving..." : "Save Changes"}
-              </button>
-              <button
-                onClick={handleResetToDefault}
-                disabled={saving || !defaultPrompt}
-                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition"
-              >
-                Return to Default
-              </button>
+              {currentModel ? (
+                <>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving || editedPrompt.trim() === currentModel.system_prompt}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  >
+                    {saving ? "Saving..." : "Save Changes"}
+                  </button>
+                  <button
+                    onClick={handleResetToDefault}
+                    disabled={saving || !defaultPrompt}
+                    className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  >
+                    Return to Default
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleSave}
+                  disabled={saving || !editedPrompt.trim()}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  {saving ? "Creating..." : "Create Model"}
+                </button>
+              )}
               <button
                 onClick={loadModel}
                 disabled={saving}
