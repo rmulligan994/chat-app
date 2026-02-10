@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const TYPESENSE_HOST = "ky213smohjuti0gcp-1.a1.typesense.net";
-const TYPESENSE_API_KEY = "Pr4OHQj4Y7Vu0F0iiUDrVzAvVLGiN0a3";
+const TYPESENSE_HOST = process.env.TYPESENSE_HOST || "ky213smohjuti0gcp-1.a1.typesense.net";
+// For model management (create/read/delete), we need an ADMIN key, not a search-only key
+// Check environment variable first, then fall back to hardcoded (which should be an admin key)
+const TYPESENSE_API_KEY = process.env.TYPESENSE_API_KEY || "Pr4OHQj4Y7Vu0F0iiUDrVzAvVLGiN0a3";
 const MODEL_ID = "job-search-assistant";
 
 // Default system prompt (from ragexperients.py)
@@ -100,7 +102,11 @@ async function typesenseApi(
  */
 export async function GET() {
   try {
+    const apiKeySource = process.env.TYPESENSE_API_KEY ? "environment" : "hardcoded";
+    const apiKeyPreview = TYPESENSE_API_KEY.substring(0, 10) + "...";
     console.log(`Fetching model: ${MODEL_ID} from ${TYPESENSE_HOST}`);
+    console.log(`API key source: ${apiKeySource}, key: ${apiKeyPreview} (length: ${TYPESENSE_API_KEY.length})`);
+    
     const response = await typesenseApi("GET", `/conversations/models/${MODEL_ID}`);
     
     console.log(`Response status: ${response.status}, ok: ${response.ok}`);
@@ -119,9 +125,29 @@ export async function GET() {
         // Try listing all models to see what exists
         try {
           const listResponse = await typesenseApi("GET", "/conversations/models");
+          console.log(`List models response: ${listResponse.status}, ok: ${listResponse.ok}`);
+          
           if (listResponse.ok) {
-            const allModels = (await listResponse.json()) as { models?: Array<{ id: string }> };
-            console.log("Available models:", allModels);
+            const listText = await listResponse.text();
+            console.log("List models response text:", listText.substring(0, 500));
+            
+            let allModels: Array<{ id: string }> = [];
+            try {
+              const parsed = JSON.parse(listText);
+              // Typesense might return an array directly or wrapped in an object
+              if (Array.isArray(parsed)) {
+                allModels = parsed;
+              } else if (parsed.models && Array.isArray(parsed.models)) {
+                allModels = parsed.models;
+              } else if (parsed.conversation_models && Array.isArray(parsed.conversation_models)) {
+                allModels = parsed.conversation_models;
+              }
+            } catch (parseError) {
+              console.error("Failed to parse list models response:", parseError);
+            }
+            
+            console.log("Available models:", allModels.map(m => m.id));
+            
             return NextResponse.json(
               { 
                 status: "error", 
@@ -130,11 +156,18 @@ export async function GET() {
                   model_id: MODEL_ID,
                   endpoint: `/conversations/models/${MODEL_ID}`,
                   typesense_error: errorText,
-                  available_models: allModels.models?.map(m => m.id) || [],
+                  available_models: allModels.map(m => m.id),
+                  list_response_status: listResponse.status,
+                  api_key_source: process.env.TYPESENSE_API_KEY ? "environment" : "hardcoded",
+                  api_key_preview: TYPESENSE_API_KEY.substring(0, 10) + "...",
+                  note: "Python script can read/list models with the same key. If available_models is empty here, check if Cloudflare Workers has a different TYPESENSE_API_KEY env var set."
                 }
               },
               { status: 404 }
             );
+          } else {
+            const listErrorText = await listResponse.text();
+            console.error("List models failed:", listErrorText);
           }
         } catch (listError) {
           console.error("Failed to list models:", listError);
@@ -338,6 +371,24 @@ export async function POST(request: NextRequest) {
       model_name: newModel.model_name,
       has_system_prompt: !!newModel.system_prompt,
     });
+    
+    // Verify the model exists by fetching it (with a small delay for Typesense to index)
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    try {
+      const verifyResponse = await typesenseApi("GET", `/conversations/models/${MODEL_ID}`);
+      if (verifyResponse.ok) {
+        const verifiedModel = await verifyResponse.json() as typeof newModel;
+        console.log("Model verified successfully via GET:", verifiedModel.id);
+        // Use the verified model instead of the creation response
+        newModel = verifiedModel;
+      } else {
+        const verifyErrorText = await verifyResponse.text();
+        console.warn(`Model verification failed (${verifyResponse.status}): ${verifyErrorText}. This might be a timing or permissions issue.`);
+      }
+    } catch (verifyError) {
+      console.warn("Model verification error (but creation succeeded):", verifyError);
+    }
     
     return NextResponse.json({
       status: "ok",
