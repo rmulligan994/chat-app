@@ -113,7 +113,14 @@ export async function GET() {
       throw new Error(`Typesense API error (${response.status}): ${errorText}`);
     }
 
-    const model = await response.json();
+    const model = (await response.json()) as {
+      id: string;
+      model_name: string;
+      system_prompt?: string;
+      max_bytes: number;
+      history_collection: string;
+      ttl: number;
+    };
     return NextResponse.json({
       status: "ok",
       model: {
@@ -197,7 +204,11 @@ export async function POST(request: NextRequest) {
       throw new Error(`Failed to create model (${createResponse.status}): ${errorText}`);
     }
 
-    const newModel = await createResponse.json();
+    const newModel = (await createResponse.json()) as {
+      id: string;
+      model_name: string;
+      system_prompt?: string;
+    };
     return NextResponse.json({
       status: "ok",
       message: "System prompt updated successfully",

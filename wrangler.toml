@@ -1,0 +1,19 @@
+name = "nextjs"
+main = ".open-next/worker.js"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+binding = "ASSETS"
+directory = ".open-next/assets"
+
+[observability]
+enabled = true
+
+# Environment variables for Cloudflare Workers
+# These should be set in Webflow Cloud dashboard or via wrangler secret put
+# [vars]
+# TYPESENSE_HOST = "ky213smohjuti0gcp-1.a1.typesense.net"
+# TYPESENSE_API_KEY = "your-typesense-api-key"
+# OPENAI_API_KEY = "your-openai-api-key"
+

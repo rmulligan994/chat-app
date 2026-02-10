@@ -152,7 +152,7 @@ export default function SystemPromptPanel() {
         <div className="border-b border-gray-200 px-6 py-4">
           <h1 className="text-2xl font-bold text-gray-900">System Prompt</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Configure the AI assistant's behavior and instructions
+            Configure the AI assistant&apos;s behavior and instructions
           </p>
         </div>
 
@@ -244,10 +244,16 @@ export default function SystemPromptPanel() {
             <div className="text-sm text-blue-800">
               <p className="font-medium mb-1">How it works:</p>
               <ul className="list-disc list-inside space-y-1 text-blue-700">
-                <li>Changes are applied by deleting and recreating the model (Typesense doesn't support in-place updates)</li>
+                <li>
+                  Changes are applied by deleting and recreating the model
+                  (Typesense doesn&apos;t support in-place updates)
+                </li>
                 <li>The model ID remains the same, so existing conversations will continue to work</li>
                 <li>Changes take effect immediately for new conversations</li>
-                <li>Use "Return to Default" to restore the original prompt from ragexperients.py</li>
+                <li>
+                  Use &quot;Return to Default&quot; to restore the original prompt from
+                  ragexperients.py
+                </li>
               </ul>
             </div>
           </div>
