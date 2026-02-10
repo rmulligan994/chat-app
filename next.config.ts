@@ -1,9 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  basePath: "/chat-app",
+  // IMPORTANT: This must match the mount path shown in Webflow Cloud
+  // (Environment details → Path). Your project is mounted at `/app`,
+  // so we use `/app` here.
+  basePath: "/app",
   env: {
-    NEXT_PUBLIC_BASE_PATH: "/chat-app",
+    NEXT_PUBLIC_BASE_PATH: "/app",
   },
   // Prevent trailing-slash redirects that convert POST → GET
   skipTrailingSlashRedirect: true,
