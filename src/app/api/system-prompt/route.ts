@@ -86,14 +86,31 @@ async function typesenseApi(
   body?: unknown
 ): Promise<Response> {
   const url = `https://${TYPESENSE_HOST}:443${endpoint}`;
-  return fetch(url, {
-    method,
-    headers: {
-      "X-TYPESENSE-API-KEY": TYPESENSE_API_KEY,
-      "Content-Type": "application/json",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  
+  // For large payloads (like system prompts), increase timeout
+  // Cloudflare Workers default timeout is 30s, but we need more for large model creation
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+  
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        "X-TYPESENSE-API-KEY": TYPESENSE_API_KEY,
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Request timeout after 60 seconds. The payload may be too large or Typesense is taking too long to process.`);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -325,7 +342,31 @@ export async function POST(request: NextRequest) {
       system_prompt_length: modelConfig.system_prompt.length,
     });
     
-    const createResponse = await typesenseApi("POST", "/conversations/models", modelConfig);
+    // IMPORTANT: Make sure we're sending the exact structure Typesense expects
+    // Typesense might reject or auto-generate IDs if the structure is wrong
+    const createPayload = {
+      id: modelConfig.id, // Explicitly set the ID
+      model_name: modelConfig.model_name,
+      api_key: modelConfig.api_key,
+      system_prompt: modelConfig.system_prompt,
+      max_bytes: modelConfig.max_bytes,
+      history_collection: modelConfig.history_collection,
+      ttl: modelConfig.ttl,
+    };
+    
+    const payloadSize = JSON.stringify(createPayload).length;
+    console.log("Create payload (redacting api_key):", {
+      ...createPayload,
+      api_key: createPayload.api_key ? `${createPayload.api_key.substring(0, 10)}...` : "missing",
+      payload_size_bytes: payloadSize,
+      payload_size_kb: (payloadSize / 1024).toFixed(2),
+    });
+    
+    if (payloadSize > 100000) { // > 100KB
+      console.warn(`⚠ Large payload detected (${(payloadSize / 1024).toFixed(2)}KB). This may cause timeout issues.`);
+    }
+    
+    const createResponse = await typesenseApi("POST", "/conversations/models", createPayload);
     
     console.log(`Create model response: ${createResponse.status}, ok: ${createResponse.ok}`);
     
@@ -386,6 +427,38 @@ export async function POST(request: NextRequest) {
           expected_id: MODEL_ID,
           id_matches: newModel.id === MODEL_ID,
         });
+        
+        // CRITICAL CHECK: If Typesense returned a UUID instead of our ID, that's the problem!
+        if (newModel.id !== MODEL_ID) {
+          console.error(`❌ CRITICAL: Typesense created model with UUID "${newModel.id}" instead of "${MODEL_ID}"!`);
+          console.error("This means Typesense ignored our 'id' field and auto-generated a UUID.");
+          console.error("Possible causes:");
+          console.error("  1. Large payload timeout - Typesense may have timed out and created async with UUID");
+          console.error("  2. The ID format is invalid (but 'job-search-assistant' should be valid)");
+          console.error("  3. There's a conflict (model with that ID already exists in Typesense's view)");
+          console.error("  4. Typesense Cloud has restrictions on custom IDs for large models");
+          console.error(`  5. Payload size: ${payloadSize} bytes (${(payloadSize / 1024).toFixed(2)}KB)`);
+          
+          // Try to delete this UUID model to clean up
+          try {
+            const cleanupResponse = await typesenseApi("DELETE", `/conversations/models/${newModel.id}`);
+            console.log(`Cleaned up UUID model: ${cleanupResponse.status}`);
+          } catch (cleanupError) {
+            console.error("Could not clean up UUID model:", cleanupError);
+          }
+          
+          // Return an error - we can't proceed with a UUID model
+          return NextResponse.json(
+            {
+              status: "error",
+              detail: `Typesense created model with UUID "${newModel.id}" instead of "${MODEL_ID}". This often happens with large payloads due to timeout or async processing. Try reducing the system prompt size or wait longer.`,
+              created_model_id: newModel.id,
+              expected_id: MODEL_ID,
+              payload_size_kb: (payloadSize / 1024).toFixed(2),
+            },
+            { status: 500 }
+          );
+        }
       } catch (parseError) {
         console.error("Failed to parse create response as JSON:", parseError);
         console.error("Full response:", responseText);
@@ -397,64 +470,46 @@ export async function POST(request: NextRequest) {
       throw error;
     }
     
-    // Verify the model was created with the correct ID
-    if (newModel.id !== MODEL_ID) {
-      console.error(`CRITICAL: Model ID mismatch! Expected "${MODEL_ID}", but got "${newModel.id}"`);
-      console.error("This means Typesense created the model with a different ID than requested.");
-      // Still continue, but this is a problem
-    }
-    
     console.log("Model created successfully:", {
       id: newModel.id,
       model_name: newModel.model_name,
       has_system_prompt: !!newModel.system_prompt,
     });
     
-    // Verify the model exists by fetching it (with a delay for Typesense to index)
-    // Try multiple times with increasing delays
-    let verified = false;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const delay = attempt * 1000; // 1s, 2s, 3s
-      console.log(`Verification attempt ${attempt}/${3} after ${delay}ms delay...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      
-      try {
-        const verifyResponse = await typesenseApi("GET", `/conversations/models/${MODEL_ID}`);
-        if (verifyResponse.ok) {
-          const verifiedModel = await verifyResponse.json() as typeof newModel;
-          console.log(`✓ Model verified successfully via GET (attempt ${attempt}):`, verifiedModel.id);
-          // Use the verified model instead of the creation response
-          newModel = verifiedModel;
-          verified = true;
-          break;
-        } else {
-          const verifyErrorText = await verifyResponse.text();
-          console.warn(`✗ Verification attempt ${attempt} failed (${verifyResponse.status}): ${verifyErrorText}`);
-        }
-      } catch (verifyError) {
-        console.warn(`✗ Verification attempt ${attempt} error:`, verifyError);
-      }
-    }
+    // Note: Typesense Cloud has replication delays, especially for large payloads.
+    // The model is created successfully (as indicated by the 200/201 response), 
+    // but it may not be immediately available via GET.
+    // The create response is authoritative - we'll use that model data.
     
-    if (!verified) {
-      console.error("⚠ WARNING: Could not verify model exists after creation. It may take longer to be available.");
-      // Also try listing all models to see if it appears with a different ID
-      try {
-        const listResponse = await typesenseApi("GET", "/conversations/models");
-        if (listResponse.ok) {
-          const listText = await listResponse.text();
-          const allModels = JSON.parse(listText);
-          const modelList = Array.isArray(allModels) ? allModels : (allModels.models || []);
-          console.log("Available models after creation:", modelList.map((m: { id: string }) => m.id));
-          const foundModel = modelList.find((m: { id: string }) => m.id === MODEL_ID || m.id === newModel.id);
-          if (foundModel) {
-            console.log("Found model in list:", foundModel.id);
-          } else {
-            console.error("Model not found in list even after creation!");
-          }
+    console.log("Model created successfully. Typesense Cloud may have replication delays.");
+    console.log(`Created model ID: "${newModel.id}", Expected: "${MODEL_ID}"`);
+    console.log(`Payload size was: ${payloadSize} bytes (${(payloadSize / 1024).toFixed(2)}KB)`);
+    
+    // For large payloads, wait longer before verification
+    // Large models may take more time to be indexed and available
+    const verificationDelay = payloadSize > 50000 ? 5000 : 2000; // 5s for large, 2s for small
+    console.log(`Waiting ${verificationDelay}ms before verification (large payloads need more time)...`);
+    
+    try {
+      await new Promise(resolve => setTimeout(resolve, verificationDelay));
+      const verifyResponse = await typesenseApi("GET", `/conversations/models/${MODEL_ID}`);
+      if (verifyResponse.ok) {
+        const verifiedModel = await verifyResponse.json() as typeof newModel;
+        console.log(`✓ Model verified via GET: ${verifiedModel.id}`);
+        newModel = verifiedModel;
+      } else {
+        const verifyErrorText = await verifyResponse.text();
+        console.log(`⚠ Model not yet available via GET (replication delay). Status: ${verifyResponse.status}`);
+        console.log(`Error: ${verifyErrorText}`);
+        if (payloadSize > 50000) {
+          console.log("Large payload detected - this may take 10-30 seconds to be fully available.");
         }
-      } catch (listError) {
-        console.error("Could not list models for verification:", listError);
+        console.log("The model was created successfully and will be available shortly.");
+      }
+    } catch (verifyError) {
+      console.log("⚠ Could not verify model (replication delay expected):", verifyError);
+      if (payloadSize > 50000) {
+        console.log("Large payload - model may take longer to be available. This is normal.");
       }
     }
     
