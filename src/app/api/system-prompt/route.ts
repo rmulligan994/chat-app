@@ -200,11 +200,39 @@ export async function POST(request: NextRequest) {
     const createResponse = await typesenseApi("POST", "/conversations/models", modelConfig);
     
     if (!createResponse.ok) {
-      const errorText = await createResponse.text();
+      let errorText: string;
+      try {
+        const errorJson = await createResponse.json();
+        errorText = typeof errorJson === "string" 
+          ? errorJson 
+          : JSON.stringify(errorJson);
+      } catch {
+        errorText = await createResponse.text();
+      }
+      
       const errorMessage = `Failed to create model (${createResponse.status}): ${errorText}`;
       console.error("Model creation failed:", errorMessage);
-      console.error("Model config:", { ...modelConfig, api_key: "[REDACTED]" });
-      throw new Error(errorMessage);
+      console.error("Model config:", { 
+        id: modelConfig.id,
+        model_name: modelConfig.model_name,
+        system_prompt_length: modelConfig.system_prompt.length,
+        max_bytes: modelConfig.max_bytes,
+        history_collection: modelConfig.history_collection,
+        ttl: modelConfig.ttl,
+        api_key_set: !!openaiApiKey,
+        api_key_length: openaiApiKey?.length || 0,
+      });
+      
+      // Return a more detailed error to the client
+      return NextResponse.json(
+        { 
+          status: "error", 
+          detail: errorMessage,
+          typesense_status: createResponse.status,
+          typesense_error: errorText,
+        },
+        { status: 500 }
+      );
     }
 
     const newModel = (await createResponse.json()) as {

@@ -92,10 +92,17 @@ export default function SystemPromptPanel() {
         status: string;
         message?: string;
         detail?: string;
+        typesense_status?: number;
+        typesense_error?: string;
       };
 
       if (!res.ok || data.status !== "ok") {
-        throw new Error(data.detail || "Failed to update system prompt");
+        // Show more detailed error if available
+        let errorMsg = data.detail || "Failed to update system prompt";
+        if (data.typesense_error) {
+          errorMsg += `\n\nTypesense Error (${data.typesense_status}): ${data.typesense_error}`;
+        }
+        throw new Error(errorMsg);
       }
 
       setSuccess(data.message || "System prompt updated successfully!");
@@ -130,10 +137,17 @@ export default function SystemPromptPanel() {
         status: string;
         message?: string;
         detail?: string;
+        typesense_status?: number;
+        typesense_error?: string;
       };
 
       if (!res.ok || data.status !== "ok") {
-        throw new Error(data.detail || "Failed to reset system prompt");
+        // Show more detailed error if available
+        let errorMsg = data.detail || "Failed to reset system prompt";
+        if (data.typesense_error) {
+          errorMsg += `\n\nTypesense Error (${data.typesense_status}): ${data.typesense_error}`;
+        }
+        throw new Error(errorMsg);
       }
 
       setSuccess(data.message || "System prompt reset to default!");
