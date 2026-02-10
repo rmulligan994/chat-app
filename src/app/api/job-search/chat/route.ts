@@ -10,27 +10,41 @@ import { jobSearchChat } from "@/lib/typesense";
  * }
  * For GET: reads params from query string (?message=...&conversation_id=...)
  */
-async function handler(request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    let chatMessage: string | undefined;
-    let conversationId: string | undefined;
-    let settings: Record<string, unknown> | undefined;
+    const chatMessage = request.nextUrl.searchParams.get("message") ?? undefined;
+    const conversationId =
+      request.nextUrl.searchParams.get("conversation_id") ?? undefined;
 
-    if (request.method === "POST") {
-      const body = (await request.json()) as {
-        message?: string;
-        conversation_id?: string;
-        settings?: Record<string, unknown>;
-      };
-      chatMessage = body.message;
-      conversationId = body.conversation_id;
-      settings = body.settings;
-    } else {
-      // GET fallback — read from query params
-      chatMessage = request.nextUrl.searchParams.get("message") ?? undefined;
-      conversationId =
-        request.nextUrl.searchParams.get("conversation_id") ?? undefined;
+    if (!chatMessage) {
+      return NextResponse.json(
+        { status: "error", detail: "message is required" },
+        { status: 400 }
+      );
     }
+
+    const result = await jobSearchChat(chatMessage, conversationId, undefined);
+    return NextResponse.json(result);
+  } catch (error: unknown) {
+    const errMessage = error instanceof Error ? error.message : "Unknown error";
+    console.error("Chat error:", error);
+    return NextResponse.json(
+      { status: "error", detail: errMessage },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = (await request.json()) as {
+      message?: string;
+      conversation_id?: string;
+      settings?: Record<string, unknown>;
+    };
+    const chatMessage = body.message;
+    const conversationId = body.conversation_id;
+    const settings = body.settings;
 
     if (!chatMessage) {
       return NextResponse.json(
@@ -50,6 +64,3 @@ async function handler(request: NextRequest) {
     );
   }
 }
-
-export const GET = handler;
-export const POST = handler;
