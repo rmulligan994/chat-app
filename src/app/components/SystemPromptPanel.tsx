@@ -109,11 +109,16 @@ export default function SystemPromptPanel() {
       setSuccess(data.message || "System prompt updated successfully!");
       // If model was created/updated, set it from the response
       if (data.model) {
+        // Use the model from response immediately
         setCurrentModel(data.model);
         setEditedPrompt(data.model.system_prompt || editedPrompt);
+        // Also reload after a delay to ensure Typesense has indexed it
+        setTimeout(() => {
+          loadModel().catch(console.error);
+        }, 1000);
       } else {
-        // Reload to get the updated model (with a small delay for Typesense to index)
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Reload to get the updated model (with a delay for Typesense to index)
+        await new Promise(resolve => setTimeout(resolve, 1000));
         await loadModel();
       }
     } catch (err: unknown) {
@@ -162,11 +167,16 @@ export default function SystemPromptPanel() {
       setSuccess(data.message || "System prompt reset to default!");
       // If model was created/updated, set it from the response
       if (data.model) {
+        // Use the model from response immediately
         setCurrentModel(data.model);
         setEditedPrompt(data.model.system_prompt || defaultPrompt);
+        // Also reload after a delay to ensure Typesense has indexed it
+        setTimeout(() => {
+          loadModel().catch(console.error);
+        }, 1000);
       } else {
-        // Reload to get the updated model (with a small delay for Typesense to index)
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Reload to get the updated model (with a delay for Typesense to index)
+        await new Promise(resolve => setTimeout(resolve, 1000));
         await loadModel();
       }
     } catch (err: unknown) {

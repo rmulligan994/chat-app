@@ -226,15 +226,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Step 1: Delete existing model (if it exists)
-    const deleteResponse = await typesenseApi("DELETE", `/conversations/models/${MODEL_ID}`);
-    // 404 is OK - model might not exist yet
-    if (!deleteResponse.ok && deleteResponse.status !== 404) {
-      const errorText = await deleteResponse.text();
-      console.warn(`Delete model warning (${deleteResponse.status}): ${errorText}`);
-    }
-
-    // Step 2: Create new model with updated prompt
+    // Step 1: Validate we can create the model before deleting
     const openaiApiKey = process.env.OPENAI_API_KEY;
     if (!openaiApiKey) {
       return NextResponse.json(
@@ -253,7 +245,26 @@ export async function POST(request: NextRequest) {
       ttl: 86400,
     };
 
+    console.log("Attempting to create/update model:", {
+      id: modelConfig.id,
+      model_name: modelConfig.model_name,
+      system_prompt_length: modelConfig.system_prompt.length,
+      api_key_set: !!openaiApiKey,
+    });
+
+    // Step 2: Delete existing model (if it exists) - but only if we're sure we can recreate
+    const deleteResponse = await typesenseApi("DELETE", `/conversations/models/${MODEL_ID}`);
+    // 404 is OK - model might not exist yet
+    if (!deleteResponse.ok && deleteResponse.status !== 404) {
+      const errorText = await deleteResponse.text();
+      console.warn(`Delete model warning (${deleteResponse.status}): ${errorText}`);
+      // Don't fail here - continue to try creating
+    }
+
+    // Step 3: Create new model with updated prompt
     const createResponse = await typesenseApi("POST", "/conversations/models", modelConfig);
+    
+    console.log(`Create model response: ${createResponse.status}, ok: ${createResponse.ok}`);
     
     if (!createResponse.ok) {
       let errorText: string;
@@ -291,7 +302,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const newModel = (await createResponse.json()) as {
+    let newModel: {
       id: string;
       model_name: string;
       system_prompt?: string;
@@ -300,10 +311,33 @@ export async function POST(request: NextRequest) {
       ttl?: number;
     };
     
+    try {
+      const responseText = await createResponse.text();
+      console.log("Create response text:", responseText.substring(0, 200));
+      
+      try {
+        newModel = JSON.parse(responseText) as typeof newModel;
+      } catch (parseError) {
+        console.error("Failed to parse create response as JSON:", parseError);
+        console.error("Full response:", responseText);
+        throw new Error(`Failed to parse model creation response: ${responseText}`);
+      }
+    } catch (error) {
+      // If we can't parse the response, the model creation likely failed
+      console.error("Error reading create response:", error);
+      throw error;
+    }
+    
     // Verify the model was created with the correct ID
     if (newModel.id !== MODEL_ID) {
       console.warn(`Model ID mismatch: expected ${MODEL_ID}, got ${newModel.id}`);
     }
+    
+    console.log("Model created successfully:", {
+      id: newModel.id,
+      model_name: newModel.model_name,
+      has_system_prompt: !!newModel.system_prompt,
+    });
     
     return NextResponse.json({
       status: "ok",
